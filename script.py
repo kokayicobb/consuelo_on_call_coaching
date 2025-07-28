@@ -11,11 +11,10 @@ from pydantic import BaseModel
 from typing import List
 from datetime import datetime
 from flask_cors import CORS
-from dotenv import load_dotenv
 import os
 from urllib.parse import quote
 
-load_dotenv() 
+# Remove the load_dotenv() line - not needed in containerized environments
 
 app = Flask(__name__)
 # This should handle everything
@@ -26,13 +25,23 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # === Twilio Configuration ===
-TWILIO_SID = os.getenv("TWILIO_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_NUMBER = os.getenv("TWILIO_NUMBER")
+# Get environment variables directly from os.environ
+TWILIO_SID = os.environ.get("TWILIO_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_NUMBER = os.environ.get("TWILIO_NUMBER")
 
-# It's also good practice to check if the variables were loaded successfully
+# Debug: Print what we're getting (remove in production)
+print(f"TWILIO_SID present: {bool(TWILIO_SID)}")
+print(f"TWILIO_AUTH_TOKEN present: {bool(TWILIO_AUTH_TOKEN)}")
+print(f"TWILIO_NUMBER present: {bool(TWILIO_NUMBER)}")
+
+# Check if the variables were loaded successfully
 if not all([TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_NUMBER]):
-    raise ValueError("Twilio credentials are not set in the .env file")
+    print(f"Missing Twilio credentials:")
+    print(f"  TWILIO_SID: {'✓' if TWILIO_SID else '✗'}")
+    print(f"  TWILIO_AUTH_TOKEN: {'✓' if TWILIO_AUTH_TOKEN else '✗'}")
+    print(f"  TWILIO_NUMBER: {'✓' if TWILIO_NUMBER else '✗'}")
+    raise ValueError("Twilio credentials are not set in environment variables")
 
 twilio_client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
 
@@ -45,7 +54,12 @@ chroma_client = chromadb.Client()
 collection = chroma_client.get_or_create_collection(name="product_catalogue")
 
 # Initialize Groq client with instructor
-groq_client = Groq()
+# Get GROQ_API_KEY from environment
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY is not set in environment variables")
+
+groq_client = Groq(api_key=GROQ_API_KEY)
 groq_client = instructor.from_groq(groq_client)
 
 # Pydantic model for structured talking points
@@ -150,11 +164,16 @@ def generate_talking_points(context_chunks, conversation):
         )
 
 # --- On Startup: Load and Embed Product Catalogue ---
-print("[Startup] Reading product catalogue...")
-full_text = read_file(PRODUCT_CATALOGUE_PATH)
-chunks = chunk_text(full_text)
-print("[Startup] Embedding and storing product catalogue in vector DB...")
-embed_and_store(chunks)
+# Check if the PDF file exists before trying to load it
+if os.path.exists(PRODUCT_CATALOGUE_PATH):
+    print("[Startup] Reading product catalogue...")
+    full_text = read_file(PRODUCT_CATALOGUE_PATH)
+    chunks = chunk_text(full_text)
+    print("[Startup] Embedding and storing product catalogue in vector DB...")
+    embed_and_store(chunks)
+else:
+    print(f"[WARNING] Product catalogue not found at {PRODUCT_CATALOGUE_PATH}")
+    print("[WARNING] Running without product catalogue. Upload the PDF to use this feature.")
 
 @app.route("/end_call", methods=["POST"])
 def end_call():
@@ -176,6 +195,7 @@ def end_call():
         
     except Exception as e:
         return {"error": f"Failed to end call: {str(e)}"}, 500
+
 @app.route("/", methods=["GET"])
 def home():
     """Home endpoint to verify the server is running."""
@@ -190,6 +210,7 @@ def home():
             "POST /call_status": "Twilio call status webhook"
         }
     }, 200
+
 @app.route("/stream", methods=["POST"])
 def stream_twiml():
     """Twilio will hit this endpoint with POST to start the call."""
@@ -202,9 +223,9 @@ def stream_twiml():
     print(f"📋 Request args: {dict(request.args)}")
     print(f"📋 Request values: {dict(request.values)}")
     
-    # Use your public Codespace URL
-    callback_url = "https://shiny-journey-4px597q46ph5794-5001.app.github.dev/transcription"
-    base_url = "https://shiny-journey-4px597q46ph5794-5001.app.github.dev"
+    # Get the base URL from environment variable or use a default
+    base_url = os.environ.get("API_BASE_URL", "https://your-app.consuelo.io")
+    callback_url = f"{base_url}/transcription"
 
     if customer_number:
         # This is the leg where we connect to the customer
@@ -290,6 +311,7 @@ def dial_status():
 </Response>"""
     
     return Response(twiml, mimetype="text/xml")
+
 @app.route("/make_call", methods=["POST", "OPTIONS"])
 def make_call():
     """
@@ -312,14 +334,12 @@ def make_call():
         sales_agent_number = data['sales_agent_number']
         customer_number = data['customer_number']
 
-        # Use your public Codespace URL
-        base_url = "https://shiny-journey-4px597q46ph5794-5001.app.github.dev"
+        # Get the base URL from environment variable
+        base_url = os.environ.get("API_BASE_URL", "https://your-app.consuelo.io")
         
-        # === THE FIX IS HERE ===
-        # We must URL-encode the customer number to ensure the '+' is preserved.
+        # URL-encode the customer number to ensure the '+' is preserved.
         encoded_customer_number = quote(customer_number)
         stream_url = f"{base_url}/stream?customer_number={encoded_customer_number}"
-        # =======================
 
         print(f"DEBUG: Initiating call with stream URL: {stream_url}")
 
@@ -415,4 +435,6 @@ def transcription():
     return Response(status=200)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    # Get port from environment variable or default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
