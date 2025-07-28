@@ -9,6 +9,5 @@ python-dotenv
 urllib3
 pydantic
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.0.1+cpu
-torchvision==0.15.2+cpu
+torch==2.7.0+cpu
 sentence-transformers
